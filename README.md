@@ -1,8 +1,19 @@
+# Watchers
+
+Two Telegram watchers running for free on GitHub Actions — no server to
+maintain:
+
+- **Uniqlo price tracker** — daily; alerts when a product's price changes.
+- **[Opéra de Paris ticket tracker](#opéra-de-paris-ticket-tracker)** — every
+  15 minutes; alerts when a sold-out performance becomes bookable.
+
+Both share the same Telegram bot credentials (`TELEGRAM_BOT_TOKEN` and
+`TELEGRAM_CHAT_ID` repo secrets) and the same helper module, `notify.py`.
+
 # Uniqlo Price Tracker
 
 Checks the price of Uniqlo product pages once a day and sends you a Telegram
-message when a price changes. Runs for free on GitHub Actions — no server to
-maintain.
+message when a price changes.
 
 ## How it works
 
@@ -76,3 +87,76 @@ Price is read from the product's base/promo price, which is shared across
 sizes and colors for virtually all Uniqlo products. A small number of
 products price certain sizes differently (`isDualPrice`); this tracker does
 not account for that and would report the base price in that case.
+
+---
+
+# Opéra de Paris ticket tracker
+
+Watches specific performances at the Opéra national de Paris and sends a
+Telegram message the moment a sold-out performance opens for booking.
+
+## How it works
+
+Each show page has a JSON fragment endpoint listing every performance, e.g.
+`.../lhistoire-de-manon/performances`. Each performance row carries an
+`actions` list whose `type` encodes availability:
+
+| `type` | Meaning on the site |
+|---|---|
+| `alert` | Sold out — the button reads "Créer une alerte" |
+| `CTABook` | **Bookable** — the button reads "Réserver" |
+| `CTAOption` | Resale only (bourse aux billets) |
+
+`check_tickets.py` fetches that endpoint for each entry in
+`tickets_watchlist.json`, looks up the performances by `perfId`, and sends a
+Telegram message when one flips to `CTABook`. The last seen status per
+performance is stored in `tickets_state.json` (committed back by the workflow),
+so you get exactly one alert per transition rather than one every run.
+
+Resale (`CTAOption`) is deliberately **not** treated as bookable. To alert on
+resale too, add `"CTAOption"` handling in `find_booking_url`.
+
+## Adding a performance to watch
+
+1. Open the show's performances endpoint in a browser — it's the show URL with
+   `/performances` appended, e.g.
+   `https://www.operadeparis.fr/saison-26-27/ballet/lhistoire-de-manon/performances`
+2. Find the performance you want in `body.rows` and note its `perfId`.
+3. Add it to `tickets_watchlist.json`:
+
+```json
+[
+  {
+    "name": "L'Histoire de Manon — Palais Garnier",
+    "url": "https://www.operadeparis.fr/saison-26-27/ballet/lhistoire-de-manon/performances",
+    "page": "https://www.operadeparis.fr/saison-26-27/ballet/lhistoire-de-manon",
+    "perf_ids": [8836]
+  }
+]
+```
+
+`perf_ids` takes several ids if you'd accept any of a set of dates.
+
+## Schedule
+
+`*/15 * * * *` in [.github/workflows/check-tickets.yml](.github/workflows/check-tickets.yml).
+GitHub bills Actions per run rounded up to the minute, so a 15-minute schedule
+needs a **public** repo (public repos get unlimited free Actions minutes).
+If you make the repo private, drop to `*/30` or slower to stay inside the
+2000 min/month free tier.
+
+GitHub also throttles and delays scheduled workflows under load, so treat the
+interval as best-effort — runs can drift by several minutes.
+
+## Local testing
+
+```bash
+pip install -r requirements.txt
+TELEGRAM_BOT_TOKEN=... TELEGRAM_CHAT_ID=... python check_tickets.py
+
+# send a test message to confirm Telegram delivery
+TELEGRAM_BOT_TOKEN=... TELEGRAM_CHAT_ID=... python check_tickets.py --test
+```
+
+Without the environment variables set, notifications print to the console
+instead of being sent.
